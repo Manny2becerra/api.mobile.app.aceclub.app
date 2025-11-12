@@ -4,6 +4,7 @@ import (
 	"api-mobile-app/src/api/common/config"
 	"api-mobile-app/src/api/common/database"
 	logging "api-mobile-app/src/api/common/logging"
+	"api-mobile-app/src/api/common/middleware"
 	establishments "api-mobile-app/src/api/establishments"
 	"fmt"
 	"log"
@@ -29,11 +30,11 @@ func main() {
 	router := http.NewServeMux()
 
 	establishmentsRouter := establishments.EstablishmentsRouter()
-	router.Handle("POST /establishments/", http.StripPrefix("/establishments", establishmentsRouter))
+	router.Handle("POST /establishments/", http.StripPrefix("/establishments", middleware.AllowRoles(establishmentsRouter, logger, "user")))
 
 	httpServer := &http.Server{
 		Addr:    config.Port,
-		Handler: router,
+		Handler: middleware.Middleware(router, config.JWTAccessSecret, logger),
 	}
 
 	err = httpServer.ListenAndServe()
