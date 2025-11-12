@@ -11,3 +11,9 @@ services:
     volumes:
       - .:/app
     restart: unless-stopped 
+    networks:
+      - bridge
+
+networks:
+  bridge:
+    external: true
