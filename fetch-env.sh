@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ENV="${1:-prod}"                       # ./fetch-env prod  (default) or ./fetch-env stage
-SSM_PATH="/${ENV}/api-embed/"  # note the trailing slash
+SSM_PATH="/${ENV}/api-mobile-app/"  # note the trailing slash
 
 # 1. Truncate—or create—.env
 > .env
@@ -22,4 +22,4 @@ done
 
 # 4. Lock down the file
 chmod 600 .env
-echo ".env written for ${ENV}" 
+echo ".env written for ${ENV}"
