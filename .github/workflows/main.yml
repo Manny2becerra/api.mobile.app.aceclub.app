@@ -1,0 +1,108 @@
+name: build-and-rollout-api-mobile-app
+
+on:
+  push:
+    branches:
+      - prod
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  REPO: api-mobile-app
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  REGISTRY: ${{ secrets.USER }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+
+jobs:
+  # ────────────────────────────────
+  # 1) Build and Push to ECR
+  # ────────────────────────────────
+  build-push:
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::${{ secrets.USER }}:role/api-mobile-app
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image
+        id: build
+        run: |
+          TAG=${{ github.sha }}
+          IMAGE=$REGISTRY/$REPO:$TAG
+
+          echo "Building image: $IMAGE"
+          docker build -t $IMAGE .
+          docker push  $IMAGE
+
+          echo "Tagging as latest..."
+          docker tag  $IMAGE $REGISTRY/$REPO:latest
+          docker push $REGISTRY/$REPO:latest
+
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+
+  # ────────────────────────────────
+  # 2) Rollout via SSM to EC2s
+  # ────────────────────────────────
+  rollout:
+    needs: build-push
+    runs-on: ubuntu-latest
+    environment: prod
+
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::${{ secrets.USER }}:role/api-mobile-app
+
+      - name: Rollout to EC2s tagged app=api-mobile-app
+        env:
+          IMAGE: ${{ needs.build-push.outputs.image }}
+          REGION: ${{ env.AWS_REGION }}
+          REGISTRY: ${{ env.REGISTRY }}
+        run: |
+          echo "Rolling out new image to EC2s tagged app=api-mobile-app"
+
+          aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy api-mobile-app rollout" \
+            --targets '[{ "Key": "tag:app", "Values": ["api-mobile-app"] }]' \
+            --parameters "commands=[
+              \"bash -c 'set -euo pipefail;
+
+              echo \\\"### Starting rollout for api-mobile-app ###\\\"
+              echo \\\"Using image: $IMAGE\\\"
+
+              cd /home/ubuntu/app || { echo \\\"App directory not found!\\\"; exit 1; }
+
+              # Login to ECR
+              aws ecr get-login-password --region \\\"$REGION\\\" | docker login -u AWS --password-stdin \\\"$REGISTRY\\\"
+
+              echo \\\"Fetching environment variables via fetch-env.sh...\\\"
+              chmod +x fetch-env.sh
+              ./fetch-env.sh prod
+
+              echo \\\"Pulling latest images defined in docker-compose.yml...\\\"
+              docker compose pull api-mobile-app
+
+              echo \\\"Rebuilding and restarting services...\\\"
+              docker compose up -d --build --remove-orphans
+
+              echo \\\"Cleaning up unused images...\\\"
+              docker image prune -f
+
+              echo \\\"✅ Deployment complete for api-mobile-app\\\"
+              '\"
+            ]" \
+            --region $REGION
