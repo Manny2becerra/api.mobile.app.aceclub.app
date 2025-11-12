@@ -12,8 +12,8 @@ services:
       - .:/app
     restart: unless-stopped 
     networks:
-      - bridge
+      - aceclub-net
 
 networks:
-  bridge:
+  aceclub-net:
     external: true

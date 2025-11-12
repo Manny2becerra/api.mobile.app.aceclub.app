@@ -15,6 +15,9 @@ env:
   REGISTRY: ${{ secrets.USER }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
 jobs:
+  # ────────────────────────────────
+  # 1) Build and Push to ECR
+  # ────────────────────────────────
   build-push:
     runs-on: ubuntu-latest
     environment: prod
@@ -35,104 +38,119 @@ jobs:
         run: |
           TAG=${{ github.sha }}
           IMAGE=$REGISTRY/$REPO:$TAG
+          echo "Building image: $IMAGE"
           docker build -t "$IMAGE" .
-          docker push  "$IMAGE"
-          docker tag   "$IMAGE" "$REGISTRY/$REPO:latest"
-          docker push  "$REGISTRY/$REPO:latest"
+          docker push "$IMAGE"
+          docker tag "$IMAGE" "$REGISTRY/$REPO:latest"
+          docker push "$REGISTRY/$REPO:latest"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
     outputs:
       image: ${{ steps.build.outputs.image }}
+
+  # ────────────────────────────────
+  # 2) Rollout via SSM to EC2s
+  # ────────────────────────────────
   rollout:
-      needs: build-push
-      runs-on: ubuntu-latest
-      environment: prod
-  
-      steps:
-        - uses: aws-actions/configure-aws-credentials@v4
-          with:
-            aws-region: ${{ env.AWS_REGION }}
-            role-to-assume: arn:aws:iam::${{ secrets.USER }}:role/edge-proxy
-  
-        - name: Rollout to EC2s tagged app=api-mobile-app
-          env:
-            IMAGE: ${{ needs.build-push.outputs.image }}
-            REGION: ${{ env.AWS_REGION }}
-            REGISTRY: ${{ env.REGISTRY }}
-          run: |
-            echo "Rolling out new image to EC2s tagged app=api-mobile-app"
-  
-            aws ssm send-command \
-              --document-name "AWS-RunShellScript" \
-              --comment "Deploy api-mobile-app rollout" \
-              --targets '[{ "Key": "tag:app", "Values": ["api-mobile-app"] }]' \
-              --parameters "commands=[
-                \"bash -c 'set -euo pipefail;
-                exec > >(tee -a /var/log/api-mobile-app-rollout.log) 2>&1
-  
-                echo \\\"### Starting rollout for api-mobile-app ###\\\"
-                echo \\\"Using image: $IMAGE\\\"
-  
-                export DEBIAN_FRONTEND=noninteractive
-                export PATH=/usr/local/bin:/usr/bin:/bin
-  
-                # Ensure Docker is available
-                if ! command -v docker >/dev/null 2>&1; then
-                  echo \\\"Docker not found — installing minimal runtime...\\\"
-                  apt-get update -yq
-                  apt-get install -yq --no-install-recommends ca-certificates curl gnupg
-                  install -m 0755 -d /etc/apt/keyrings
-                  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-                  chmod a+r /etc/apt/keyrings/docker.gpg
-                  echo \\\"deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \$(. /etc/os-release && echo \\\"$VERSION_CODENAME\\\") stable\\\" > /etc/apt/sources.list.d/docker.list
-                  apt-get update -yq
-                  apt-get install -yq --no-install-recommends docker-ce docker-ce-cli containerd.io docker-compose-plugin
-                  systemctl enable docker
-                  systemctl start docker
-                fi
-  
-                # Ensure app folder exists and repo synced
-                if [ ! -d /opt/app ]; then
-                  echo \\\"App directory not found — cloning fresh copy...\\\"
-                  mkdir -p /opt
-                  cd /opt
-                  git clone https://github.com/Manny2becerra/api.mobile.app.aceclub.app.git app
-                else
-                  echo \\\"App directory exists — updating from prod branch...\\\"
-                  cd /opt/app
-                  git fetch --all && git reset --hard origin/prod || true
-                fi
-  
-                # Ensure AWS CLI present
-                if ! command -v aws >/dev/null 2>&1; then
-                  echo \\\"AWS CLI not found — installing...\\\"
-                  apt-get update -yq
-                  apt-get install -yq --no-install-recommends unzip curl
-                  curl -s https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip
-                  unzip -q awscliv2.zip
-                  ./aws/install
-                  rm -rf aws awscliv2.zip
-                  export PATH=/usr/local/bin:$PATH
-                fi
-  
-                echo \\\"Logging into ECR...\\\"
-                aws ecr get-login-password --region \\\"$REGION\\\" | docker login -u AWS --password-stdin \\\"$REGISTRY\\\"
-  
-                echo \\\"Fetching environment variables via fetch-env.sh...\\\"
+    needs: build-push
+    runs-on: ubuntu-latest
+    environment: prod
+
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::${{ secrets.USER }}:role/edge-proxy
+
+      - name: Rollout to EC2s tagged app=api-mobile-app
+        env:
+          IMAGE: ${{ needs.build-push.outputs.image }}
+          REGION: ${{ env.AWS_REGION }}
+          REGISTRY: ${{ env.REGISTRY }}
+        run: |
+          echo "Rolling out new image to EC2s tagged app=api-mobile-app"
+
+          aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy api-mobile-app rollout" \
+            --targets '[{ "Key": "tag:app", "Values": ["api-mobile-app"] }]' \
+            --parameters "commands=[
+              \"bash -c 'set -euo pipefail;
+              exec > >(tee -a /var/log/api-mobile-app-rollout.log) 2>&1
+
+              echo \\\"### Starting rollout for api-mobile-app ###\\\"
+              echo \\\"Using image: $IMAGE\\\"
+
+              export DEBIAN_FRONTEND=noninteractive
+              export PATH=/usr/local/bin:/usr/bin:/bin
+
+              # Ensure Docker runtime
+              if ! command -v docker >/dev/null 2>&1; then
+                echo \\\"Docker not found — installing minimal runtime...\\\"
+                apt-get update -yq
+                apt-get install -yq --no-install-recommends ca-certificates curl gnupg
+                install -m 0755 -d /etc/apt/keyrings
+                curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+                chmod a+r /etc/apt/keyrings/docker.gpg
+                echo \\\"deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \$(. /etc/os-release && echo \\\"$VERSION_CODENAME\\\") stable\\\" > /etc/apt/sources.list.d/docker.list
+                apt-get update -yq
+                apt-get install -yq --no-install-recommends docker-ce docker-ce-cli containerd.io docker-compose-plugin
+                systemctl enable docker
+                systemctl start docker
+              fi
+
+              # Ensure /opt/app exists and repo synced
+              if [ ! -d /opt/app ]; then
+                echo \\\"App directory not found — cloning fresh copy...\\\"
+                mkdir -p /opt
+                cd /opt
+                git clone https://github.com/Manny2becerra/api.mobile.app.aceclub.app.git app
+              else
+                echo \\\"App directory exists — updating from prod branch...\\\"
                 cd /opt/app
-                chmod +x fetch-env.sh
-                ./fetch-env.sh prod
-  
-                echo \\\"Pulling latest image and restarting service...\\\"
-                docker compose down || true
-                docker compose pull api-mobile-app
-                docker compose up -d --remove-orphans
-  
-                echo \\\"Cleaning up old images...\\\"
-                docker image prune -f
-  
-                echo \\\"✅ Deployment complete for api-mobile-app\\\"
-                '\"
-              ]" \
-              --region $REGION
-    
+                git fetch --all && git reset --hard origin/prod || true
+              fi
+
+              # Ensure AWS CLI
+              if ! command -v aws >/dev/null 2>&1; then
+                echo \\\"AWS CLI not found — installing...\\\"
+                apt-get update -yq
+                apt-get install -yq unzip curl
+                curl -s https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip
+                unzip -q awscliv2.zip
+                ./aws/install
+                rm -rf aws awscliv2.zip
+                export PATH=/usr/local/bin:$PATH
+              fi
+
+              echo \\\"Logging into ECR...\\\"
+              aws ecr get-login-password --region \\\"$REGION\\\" | docker login -u AWS --password-stdin \\\"$REGISTRY\\\"
+
+              # Ensure shared Docker network exists
+              echo \\\"Ensuring shared Docker network aceclub-net exists...\\\"
+              docker network inspect aceclub-net >/dev/null 2>&1 || docker network create aceclub-net
+
+              echo \\\"Attaching containers to aceclub-net (if running)...\\\"
+              docker network connect aceclub-net edge-proxy 2>/dev/null || true
+              docker network connect aceclub-net app-api-mobile-app-1 2>/dev/null || true
+
+              echo \\\"Fetching environment variables via fetch-env.sh...\\\"
+              cd /opt/app
+              chmod +x fetch-env.sh
+              ./fetch-env.sh prod
+
+              echo \\\"Pulling latest image and restarting service...\\\"
+              docker compose down || true
+              docker compose pull api-mobile-app
+              docker compose up -d --remove-orphans
+
+              echo \\\"Reattaching app container to aceclub-net...\\\"
+              docker network connect aceclub-net app-api-mobile-app-1 2>/dev/null || true
+
+              echo \\\"Cleaning up old images...\\\"
+              docker image prune -f
+
+              echo \\\"✅ Deployment complete for api-mobile-app\\\"
+              '\"
+            ]" \
+            --region $REGION
