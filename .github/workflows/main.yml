@@ -64,7 +64,7 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: arn:aws:iam::${{ secrets.USER }}:role/api-mobile-app
+          role-to-assume: arn:aws:iam::${{ secrets.USER }}:role/edge-proxy
 
       - name: Rollout to EC2s tagged app=api-mobile-app
         env:
