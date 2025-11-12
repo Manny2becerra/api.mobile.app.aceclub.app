@@ -90,7 +90,20 @@ jobs:
                 git fetch --all && git reset --hard origin/prod || true
               fi
 
-              # Login to ECR
+              # Ensure AWS CLI installed for root
+              if ! command -v aws >/dev/null 2>&1; then
+                echo \\\"AWS CLI not found — installing...\\\"
+                apt-get update -y
+                apt-get install -y unzip curl
+                curl -s \\\"https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip\\\" -o awscliv2.zip
+                unzip -q awscliv2.zip
+                ./aws/install
+                rm -rf awscliv2.zip aws
+                export PATH=/usr/local/bin:$PATH
+              fi
+
+              # Login to ECR (non-interactive)
+              export PATH=/usr/local/bin:$PATH
               aws ecr get-login-password --region $REGION | docker login -u AWS --password-stdin $REGISTRY
 
               echo \\\"Fetching environment variables via fetch-env.sh...\\\"
@@ -111,3 +124,4 @@ jobs:
               '\"
             ]" \
             --region $REGION
+
