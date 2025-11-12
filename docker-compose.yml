@@ -3,9 +3,7 @@ version: '3.8'
 services:
   
   api-mobile-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: 767397961688.dkr.ecr.us-east-1.amazonaws.com/api-mobile-app:latest
     ports:
       - "3000:3000"
     env_file:
