@@ -2,7 +2,8 @@ name: build-and-rollout-api-mobile-app
 
 on:
   push:
-    branches: [prod]
+    branches:
+      - prod
 
 permissions:
   id-token: write
@@ -53,86 +54,60 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: arn:aws:iam::${{ secrets.USER }}:role/edge-proxy
 
-      - name: Roll out to EC2s tagged app=api-mobile-app
+      - name: Rollout to EC2s tagged app=api-mobile-app
         env:
           IMAGE: ${{ needs.build-push.outputs.image }}
           REGION: ${{ env.AWS_REGION }}
           REGISTRY: ${{ env.REGISTRY }}
         run: |
-          set -euo pipefail
-          echo "Rolling out to EC2s tagged app=api-mobile-app"
+          echo "Rolling out new image to EC2s tagged app=api-mobile-app"
 
-          # make sure CLI and Docker exist on runner
-          if ! command -v aws >/dev/null 2>&1; then
-            sudo apt-get update && sudo apt-get install -y unzip
-            curl -s https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip
-            unzip -q awscliv2.zip && sudo ./aws/install
-            rm -rf aws awscliv2.zip
-          fi
-          if ! command -v docker >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y ca-certificates curl gnupg
-            sudo install -m 0755 -d /etc/apt/keyrings
-            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
-              sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-            echo \
-              "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-              https://download.docker.com/linux/ubuntu \
-              $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-              sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-            sudo apt-get update
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-            sudo systemctl enable docker && sudo systemctl start docker
-          fi
-
-          # build the remote script safely via heredoc
-          cat <<'EOF' > rollout-script.sh
-          #!/bin/bash
-          set -euo pipefail
-          echo "### Starting rollout for api-mobile-app ###"
-          echo "Using image: $IMAGE"
-
-          # Ensure git installed
-          if ! command -v git >/dev/null 2>&1; then
-            apt-get update && apt-get install -y git
-          fi
-
-          # Ensure /opt/app exists and repo synced
-          if [ ! -d "/opt/app" ]; then
-            echo "App directory not found — cloning..."
-            mkdir -p /opt
-            cd /opt
-            git clone https://github.com/Manny2becerra/api.mobile.app.aceclub.app.git app
-          else
-            echo "App directory exists — updating..."
-            cd /opt/app
-            git fetch --all && git reset --hard origin/prod || true
-          fi
-
-          # Login to ECR
-          aws ecr get-login-password --region "$REGION" | docker login -u AWS --password-stdin "$REGISTRY"
-
-          echo "Fetching environment variables..."
-          chmod +x /opt/app/fetch-env.sh
-          cd /opt/app
-          ./fetch-env.sh prod
-
-          echo "Pulling images..."
-          docker compose pull api-mobile-app
-
-          echo "Rebuilding & restarting..."
-          docker compose up -d --build --remove-orphans
-
-          echo "Cleaning up old images..."
-          docker image prune -f
-
-          echo "✅ Deployment complete"
-          EOF
-
-          # send the script contents to SSM (escape properly)
           aws ssm send-command \
             --document-name "AWS-RunShellScript" \
-            --comment "api-mobile-app rollout" \
-            --targets '[{"Key":"tag:app","Values":["api-mobile-app"]}]' \
-            --parameters commands="$(awk '{printf "%s\\n", $0}' rollout-script.sh)" \
-            --region "$REGION"
+            --comment "Deploy api-mobile-app rollout" \
+            --targets '[{ "Key": "tag:app", "Values": ["api-mobile-app"] }]' \
+            --parameters "commands=[
+              \"bash -c 'set -euo pipefail;
+
+              echo \\\"### Starting rollout for api-mobile-app ###\\\"
+              echo \\\"Using image: $IMAGE\\\"
+
+              # Ensure git is installed
+              if ! command -v git >/dev/null 2>&1; then
+                echo \\\"Git not found — installing...\\\"
+                apt-get update && apt-get install -y git
+              fi
+
+              # Ensure /opt/app exists and repo synced
+              if [ ! -d /opt/app ]; then
+                echo \\\"App directory not found — cloning repo...\\\"
+                mkdir -p /opt
+                cd /opt
+                git clone https://github.com/Manny2becerra/api.mobile.app.aceclub.app.git app
+              else
+                echo \\\"App directory exists — updating...\\\"
+                cd /opt/app
+                git fetch --all && git reset --hard origin/prod || true
+              fi
+
+              # Login to ECR
+              aws ecr get-login-password --region $REGION | docker login -u AWS --password-stdin $REGISTRY
+
+              echo \\\"Fetching environment variables via fetch-env.sh...\\\"
+              chmod +x /opt/app/fetch-env.sh
+              cd /opt/app
+              ./fetch-env.sh prod
+
+              echo \\\"Pulling latest images...\\\"
+              docker compose pull api-mobile-app
+
+              echo \\\"Rebuilding and restarting services...\\\"
+              docker compose up -d --build --remove-orphans
+
+              echo \\\"Cleaning up unused images...\\\"
+              docker image prune -f
+
+              echo \\\"✅ Deployment complete for api-mobile-app\\\"
+              '\"
+            ]" \
+            --region $REGION
