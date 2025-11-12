@@ -113,7 +113,18 @@ jobs:
               echo \\\"### Starting rollout for api-mobile-app ###\\\"
               echo \\\"Using image: $IMAGE\\\"
 
-              cd /home/ubuntu/app || { echo \\\"App directory not found!\\\"; exit 1; }
+              # Ensure app directory exists and repo is cloned
+              if [ ! -d "/home/ubuntu/app" ]; then
+                echo "App directory not found — cloning repo..."
+                mkdir -p /home/ubuntu
+                cd /home/ubuntu
+                git clone https://github.com/Manny2becerra/api.mobile.app.aceclub.app.git app
+              else
+                echo "App directory exists — updating..."
+                cd /home/ubuntu/app
+                git fetch --all && git reset --hard origin/prod || true
+              fi
+
 
               # Login to ECR
               aws ecr get-login-password --region \\\"$REGION\\\" | docker login -u AWS --password-stdin \\\"$REGISTRY\\\"
