@@ -29,11 +29,11 @@ func (db *DbClient) Close() {
 func Connect(connectionString string, databaseName string, s3BucketName string, s3Region string, s3AccessKey string, s3AccessSecret string) (c *DbClient, e error) {
 	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(connectionString))
 	if err != nil {
-		return nil, errors.New("failed to connect to database")
+		return nil, errors.New("failed to connect to database " + err.Error())
 	}
 
 	if err := client.Ping(context.TODO(), nil); err != nil {
-		return nil, errors.New("failed to ping database")
+		return nil, errors.New("failed to ping database " + err.Error())
 	}
 
 	fmt.Println("Databases connected successfully")
