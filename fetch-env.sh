@@ -22,4 +22,4 @@ done
 
 # 4. Lock down the file
 chmod 600 .env
-echo ".env written for ${ENV}"
+echo ".env written for ${ENV}" 
